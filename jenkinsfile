@@ -6,13 +6,15 @@ pipeline {
     stages {
         stage('Clone Repository') {
             steps {
-                checkout([$class: 'GitSCM', branches: [[name: '*/main']], userRemoteConfigs: [[url: 'https://github.com/delaroth/devopsAssignment/tree/e02089252c377c307b290f7451e123db1d016bbc/webApp']]])
+                sh 'echo already cloned in pipline commands'
+                // checkout([$class: 'GitSCM', branches: [[name: '*/main']], userRemoteConfigs: [[url: 'https://github.com/delaroth/devopsAssignment/tree/e02089252c377c307b290f7451e123db1d016bbc/webApp']]])
             }
         }
         stage('Deploy to NGINX') {
             steps {
                 sh '''
                 sudo chmod -R 777 /usr/share/nginx/html
+                cd webApp
                 echo Deploying application to NGINX server...
                 sudo rm -rf $DEPLOY_PATH/*  # Clear existing files in the NGINX directory
                 sudo cp -r * $DEPLOY_PATH  # Copy new files to NGINX directory
