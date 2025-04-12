@@ -1,0 +1,41 @@
+pipeline {
+    agent any
+    parameters {
+        choice(name: 'ENV', choices: ['dev', 'test', 'prod'], description: 'Select deployment environment')
+        string(name: 'VERSION', defaultValue: '1.0.0', description: 'Application version to deploy')
+    }
+    stages {
+        stage('Fetch Config from Consul') {
+            steps {
+                sh 'consul kv get config/$ENV > config.json'
+                sh 'cat config.json'
+            }
+        }
+        stage('Install Dependencies') {
+            steps {
+                sh '''
+                echo Installing dependencies...
+                npm install  # If it's a Node.js project
+                '''
+            }
+        }
+        stage('Build Application') {
+            steps {
+                sh '''
+                echo Building application version $VERSION...
+                npm run build  # Replace with the actual build command for your project
+                '''
+            }
+        }
+        stage('Deploy Application') {
+            steps {
+                sh '''
+                echo Deploying to $ENV environment...
+                # Mock deployment command - replace with actual deployment steps
+                scp -r ./build user@aws-instance:/path/to/deployment/directory
+                ssh user@aws-instance "cd /path/to/deployment/directory && pm2 restart all"
+                '''
+            }
+        }
+    }
+}
