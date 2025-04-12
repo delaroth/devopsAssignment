@@ -13,6 +13,8 @@ pipeline {
         stage('Deploy to NGINX') {
             steps {
                 sh '''
+                sudo apt update
+                sudo apt install sudo
                 cd webApp
                 echo Deploying application to NGINX server...
                 sudo rm -rf $DEPLOY_PATH/*  # Clear existing files in the NGINX directory
