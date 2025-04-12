@@ -5,7 +5,7 @@ pipeline {
     }
     stages {
         stage('Clone Repository') {
-            steps {t
+            steps {
                 checkout([$class: 'GitSCM', branches: [[name: '*/main']], userRemoteConfigs: [[url: 'https://github.com/delaroth/devopsAssignment/tree/main/webApp.git']]])
             }
         }
