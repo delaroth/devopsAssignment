@@ -6,7 +6,7 @@ pipeline {
     stages {
         stage('Clone Repository') {
             steps {
-                checkout([$class: 'GitSCM', branches: [[name: '*/main']], userRemoteConfigs: [[url: 'https://github.com/delaroth/devopsAssignment/tree/main/webApp.git']]])
+                checkout([$class: 'GitSCM', branches: [[name: '*/main']], userRemoteConfigs: [[url: 'https://github.com/delaroth/devopsAssignment/tree/e02089252c377c307b290f7451e123db1d016bbc/webApp']]])
             }
         }
         stage('Deploy to NGINX') {
