@@ -1,8 +1,8 @@
 pipeline {
     agent any
-    parameters {
-        string(name: 'DEPLOY_PATH', defaultValue: '/usr/share/nginx/html', description: 'Path to deploy the HTML project')
-    }
+    // parameters {
+    //     string(name: 'DEPLOY_PATH', defaultValue: '/usr/share/nginx/html', description: 'Path to deploy the HTML project.')
+    // }
     stages {
         stage('Fetch consul info') {
             steps {
