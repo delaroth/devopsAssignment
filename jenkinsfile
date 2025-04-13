@@ -14,7 +14,7 @@ pipeline {
                  '''
                             }
         }
-        e('Parse Config') {
+        ('Parse Config') {
             steps {
                 sh '''
                 echo Parsing configuration...
