@@ -14,7 +14,7 @@ pipeline {
                  '''
                             }
         }
-        ('Parse Config') {
+        stage('Parse Config') {
             steps {
                 sh '''
                 echo Parsing configuration...
