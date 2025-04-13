@@ -4,11 +4,13 @@ pipeline {
         string(name: 'DEPLOY_PATH', defaultValue: '/usr/share/nginx/html', description: 'Path to deploy the HTML project')
     }
     stages {
-        stage('Clone Repository') {
+        stage('Fetch consul info') {
             steps {
-                sh 'echo already cloned in pipline commands'
-                // checkout([$class: 'GitSCM', branches: [[name: '*/main']], userRemoteConfigs: [[url: 'https://github.com/delaroth/devopsAssignment/tree/e02089252c377c307b290f7451e123db1d016bbc/webApp']]])
-            }
+                sh '''
+                consul kv get app/config > config.json
+                cat config.json
+                '''
+                            }
         }
         stage('Deploy to NGINX') {
             steps {
