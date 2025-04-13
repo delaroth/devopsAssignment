@@ -7,10 +7,23 @@ pipeline {
         stage('Fetch consul info') {
             steps {
                 sh '''
-                consul kv get app/config > config.json
+                echo Fetching configuration from Consul...
+                consul kv get html/config > config.json
+                echo Configuration fetched successfully:
                 cat config.json
-                '''
+                 '''
                             }
+        }
+        e('Parse Config') {
+            steps {
+                sh '''
+                echo Parsing configuration...
+                DEPLOY_PATH=$(jq -r '.deploy_path' config.json)
+                ENV=$(jq -r 'env' config.json)
+                echo "Deployment Path: $DEPLOY_PATH"
+                echo "Environment: $ENV"
+                '''
+            }
         }
         stage('Deploy to NGINX') {
             steps {
