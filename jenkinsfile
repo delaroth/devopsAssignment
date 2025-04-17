@@ -1,39 +1,80 @@
 pipeline {
-    agent any
-    // parameters {
-    //     string(name: 'DEPLOY_PATH', defaultValue: '/usr/share/nginx/html', description: 'Path to deploy the HTML project.')
-    // }
+    agent any // Runs on any available agent (likely the Jenkins controller itself)
+
+    environment {
+        // Define variables for clarity and easy changes
+        CONSUL_KV_URL = 'http://consul:8500/v1/kv/html/config?raw=true' // Address for the specific Consul KV item
+        NGINX_CONTAINER_NAME = 'nginx' // The container_name specified in docker-compose.yml
+        // Default Nginx deployment path if Consul lookup fails or key is missing
+        DEFAULT_DEPLOY_PATH = '/usr/share/nginx/html'
+    }
+
     stages {
-        stage('Fetch consul info') {
+        stage('Fetch and Parse Consul Config') {
             steps {
-                sh '''
-                echo Fetching configuration from Consul...
-                consul kv get html/config > config.json
-                echo Configuration fetched successfully:
-                cat config.json
-                 '''
-                            }
-        }
-        stage('Parse Config') {
-            steps {
-                sh '''
-                echo Parsing configuration...
-                DEPLOY_PATH=$(jq -r '.deploy_path' config.json)
-                ENV=$(jq -r 'env' config.json)
-                echo "Deployment Path: $DEPLOY_PATH"
-                echo "Environment: $ENV"
-                '''
+                script {
+                    // Initialize pipeline environment variables with defaults
+                    env.DEPLOY_PATH = env.DEFAULT_DEPLOY_PATH
+                    env.APP_ENV = 'unknown'
+
+                    try {
+                        // Use curl to fetch the value from the Consul KV store API
+                        // Requires Jenkins container to be on the same network as Consul container ('consul_net')
+                        // -sS: Silent mode but show errors
+                        // -f: Fail fast with non-zero exit code on server errors (like 404 Not Found)
+                        def response = sh(script: "curl -sSf ${env.CONSUL_KV_URL}", returnStdout: true).trim()
+
+                        if (response) {
+                            echo "Raw JSON fetched from Consul:\n${response}"
+                            // Use Jenkins pipeline utility 'readJSON' to parse the response
+                            def config = readJSON text: response
+
+                            // Safely get values from parsed JSON, use defaults if keys don't exist
+                            env.DEPLOY_PATH = config.deploy_path ?: env.DEFAULT_DEPLOY_PATH // Use value from 'deploy_path' key or default
+                            env.APP_ENV = config.env ?: 'unknown'                      // Use value from 'env' key or 'unknown'
+
+                            echo "Successfully parsed configuration."
+                        } else {
+                            // Handle case where the key exists but has no value
+                            echo "WARN: No configuration value found in Consul at ${env.CONSUL_KV_URL}. Using default deployment path."
+                        }
+                    } catch (Exception e) {
+                        // Handle errors like network issues, 404 Not Found from curl -f, or JSON parsing errors
+                        echo "WARN: Failed to fetch or parse config from Consul: ${e.message}. Using default deployment path."
+                        // Keep the default env.DEPLOY_PATH set above
+                    }
+                    // Print final values being used
+                    echo "Using Deployment Path: ${env.DEPLOY_PATH}"
+                    echo "Using Environment: ${env.APP_ENV}"
+                }
             }
         }
-        stage('Deploy to NGINX') {
+
+        stage('Build / Prepare Web Content') {
+            // This stage assumes your web content is available, e.g., checked out from Git.
+            // If you have build steps (npm install, etc.), add them here.
+            // We assume the content to deploy is in the 'webApp' subdirectory.
             steps {
-                sh '''
-                cd webApp
-                echo Deploying application to NGINX server...
-                sudo rm -rf $DEPLOY_PATH/*  # Clear existing files in the NGINX directory
-                sudo cp -r * $DEPLOY_PATH  # Copy new files to NGINX directory
-                echo Deployment completed successfully!
-                '''
+                echo "Preparing web content from workspace/webApp directory..."
+                // Example: Check if webApp directory exists
+                sh "if [ ! -d 'webApp' ]; then echo 'ERROR: Source directory webApp not found!'; exit 1; fi"
+                sh "echo 'Contents to deploy:'; ls -l webApp/"
+            }
+        }
+
+        stage('Deploy to NGINX Container') {
+            steps {
+                // Use 'docker cp' to copy files from the Jenkins workspace INTO the Nginx container.
+                // This requires the Jenkins container to have the Docker CLI and access to the host's Docker socket.
+                sh """
+                echo "Deploying webApp contents to NGINX container '${env.NGINX_CONTAINER_NAME}' at path '${env.DEPLOY_PATH}'..."
+
+                # The source 'webApp/.' copies the CONTENTS of webApp, not the directory itself.
+                # The destination specifies the container name and the path inside the container.
+                docker cp webApp/. ${env.NGINX_CONTAINER_NAME}:${env.DEPLOY_PATH}/
+
+                echo "Deployment to Nginx container completed!"
+                """
             }
         }
     }
