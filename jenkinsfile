@@ -1,62 +1,69 @@
 pipeline {
-    agent any // Runs on any available agent (likely the Jenkins controller itself)
+    agent any // Runs on any available agent
 
     environment {
-        // Define variables for clarity and easy changes
-        CONSUL_KV_URL = 'http://consul:8500/v1/kv/html/config?raw=true' // Address for the specific Consul KV item
-        NGINX_CONTAINER_NAME = 'nginx' // The container_name specified in docker-compose.yml
-        // Default Nginx deployment path if Consul lookup fails or key is missing
+        CONSUL_KV_URL = 'http://consul:8500/v1/kv/html/config?raw=true'
+        NGINX_CONTAINER_NAME = 'nginx'
         DEFAULT_DEPLOY_PATH = '/usr/share/nginx/html'
+        // Temp file to pass parsed variables between stages
+        PROPERTIES_FILE = 'consul_config.properties'
     }
 
     stages {
         stage('Fetch and Parse Consul Config') {
             steps {
-                script {
-                    // Initialize pipeline environment variables with defaults
-                    env.DEPLOY_PATH = env.DEFAULT_DEPLOY_PATH
-                    env.APP_ENV = 'unknown'
+                // **IMPORTANT**: This stage requires 'jq' to be installed on the Jenkins agent!
+                // You might need to add 'apt-get update && apt-get install -y jq' or 'yum install -y jq'
+                // to your Jenkins agent setup (e.g., Dockerfile) if it's not already present.
+                sh """
+                    echo "Fetching configuration from Consul (${env.CONSUL_KV_URL})..."
+                    # Fetch JSON and save to a temporary file
+                    curl -sSf ${env.CONSUL_KV_URL} -o config.json
 
-                    try {
-                        // Use curl to fetch the value from the Consul KV store API
-                        // Requires Jenkins container to be on the same network as Consul container ('consul_net')
-                        // -sS: Silent mode but show errors
-                        // -f: Fail fast with non-zero exit code on server errors (like 404 Not Found)
-                        def response = sh(script: "curl -sSf ${env.CONSUL_KV_URL}", returnStdout: true).trim()
+                    # Verify that the fetch succeeded and the file contains data
+                    if [ ! -s config.json ]; then
+                        echo "ERROR: Failed to fetch configuration from Consul or received empty response."
+                        # Optionally, fallback to default and write properties anyway
+                        echo "Using default deployment path: ${env.DEFAULT_DEPLOY_PATH}"
+                        echo "DEPLOY_PATH=${env.DEFAULT_DEPLOY_PATH}" > ${env.PROPERTIES_FILE}
+                        echo "APP_ENV=unknown" >> ${env.PROPERTIES_FILE}
+                        # exit 1 # Or exit if config is mandatory
+                    else
+                        echo "Raw JSON fetched:"
+                        cat config.json
 
-                        if (response) {
-                            echo "Raw JSON fetched from Consul:\n${response}"
-                            // Use Jenkins pipeline utility 'readJSON' to parse the response
-                            def config = readJSON text: response
+                        echo "Parsing configuration using jq..."
+                        # Use jq to parse values. Provide default via // if key is null/missing in JSON.
+                        # The outer || handles cases where jq fails (e.g., invalid JSON)
+                        PARSED_DEPLOY_PATH=\$(jq -r '.deploy_path // "${env.DEFAULT_DEPLOY_PATH}"' config.json || echo '${env.DEFAULT_DEPLOY_PATH}')
+                        PARSED_APP_ENV=\$(jq -r '.env // "unknown"' config.json || echo 'unknown')
 
-                            // Safely get values from parsed JSON, use defaults if keys don't exist
-                            env.DEPLOY_PATH = config.deploy_path ?: env.DEFAULT_DEPLOY_PATH // Use value from 'deploy_path' key or default
-                            env.APP_ENV = config.env ?: 'unknown'                      // Use value from 'env' key or 'unknown'
+                        # Handle jq outputting the string "null" if key exists but value is null
+                        if [ "\$PARSED_DEPLOY_PATH" = "null" ]; then PARSED_DEPLOY_PATH="${env.DEFAULT_DEPLOY_PATH}"; fi
+                        if [ "\$PARSED_APP_ENV" = "null" ]; then PARSED_APP_ENV="unknown"; fi
 
-                            echo "Successfully parsed configuration."
-                        } else {
-                            // Handle case where the key exists but has no value
-                            echo "WARN: No configuration value found in Consul at ${env.CONSUL_KV_URL}. Using default deployment path."
-                        }
-                    } catch (Exception e) {
-                        // Handle errors like network issues, 404 Not Found from curl -f, or JSON parsing errors
-                        echo "WARN: Failed to fetch or parse config from Consul: ${e.message}. Using default deployment path."
-                        // Keep the default env.DEPLOY_PATH set above
-                    }
-                    // Print final values being used
-                    echo "Using Deployment Path: ${env.DEPLOY_PATH}"
-                    echo "Using Environment: ${env.APP_ENV}"
-                }
+                        echo "Deployment Path determined: \$PARSED_DEPLOY_PATH"
+                        echo "Environment determined: \$PARSED_APP_ENV"
+
+                        # Write the determined values to a properties file for use in later stages
+                        echo "Writing properties to ${env.PROPERTIES_FILE}..."
+                        echo "DEPLOY_PATH=\${PARSED_DEPLOY_PATH}" > ${env.PROPERTIES_FILE}
+                        echo "APP_ENV=\${PARSED_APP_ENV}" >> ${env.PROPERTIES_FILE}
+
+                        echo "Properties file content:"
+                        cat ${env.PROPERTIES_FILE}
+                    fi
+
+                    # Clean up the temporary JSON file
+                    rm -f config.json
+                """
             }
         }
 
         stage('Build / Prepare Web Content') {
-            // This stage assumes your web content is available, e.g., checked out from Git.
-            // If you have build steps (npm install, etc.), add them here.
-            // We assume the content to deploy is in the 'webApp' subdirectory.
+            // (Same as before)
             steps {
                 echo "Preparing web content from workspace/webApp directory..."
-                // Example: Check if webApp directory exists
                 sh "if [ ! -d 'webApp' ]; then echo 'ERROR: Source directory webApp not found!'; exit 1; fi"
                 sh "echo 'Contents to deploy:'; ls -l webApp/"
             }
@@ -64,17 +71,28 @@ pipeline {
 
         stage('Deploy to NGINX Container') {
             steps {
-                // Use 'docker cp' to copy files from the Jenkins workspace INTO the Nginx container.
-                // This requires the Jenkins container to have the Docker CLI and access to the host's Docker socket.
-                sh """
-                echo "Deploying webApp contents to NGINX container '${env.NGINX_CONTAINER_NAME}' at path '${env.DEPLOY_PATH}'..."
+                script {
+                    // Read the properties file created in the previous stage
+                    // This requires the 'Pipeline Utility Steps' plugin for readProperties
+                    // Hopefully this step *is* available, it's more common than readJSON.
+                    def props = readProperties file: env.PROPERTIES_FILE
+                    def deployPath = props.DEPLOY_PATH
+                    // def appEnv = props.APP_ENV // You can use this value if needed
 
-                # The source 'webApp/.' copies the CONTENTS of webApp, not the directory itself.
-                # The destination specifies the container name and the path inside the container.
-                docker cp webApp/. ${env.NGINX_CONTAINER_NAME}:${env.DEPLOY_PATH}/
+                    if (!deployPath) {
+                        // This shouldn't happen if the previous stage wrote the file correctly, even with defaults
+                        error "Critical error: DEPLOY_PATH could not be determined."
+                    }
 
-                echo "Deployment to Nginx container completed!"
-                """
+                    echo "Deploying using path: ${deployPath} (read from properties file)"
+
+                    // Use docker cp command with the path read from the properties file
+                    sh """
+                    echo "Deploying webApp contents to NGINX container '${env.NGINX_CONTAINER_NAME}' at path '${deployPath}'..."
+                    docker cp webApp/. ${env.NGINX_CONTAINER_NAME}:${deployPath}/
+                    echo "Deployment to Nginx container completed!"
+                    """
+                }
             }
         }
     }
